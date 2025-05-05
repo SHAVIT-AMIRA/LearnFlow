@@ -10,7 +10,6 @@ import { translateWord } from '@/shared/utils/translate';
 import { enqueueWrite } from '@/indexdb/dexie';
 import { showTooltip } from './tooltip';
 import { CaptionDetector } from '@/types';
-import { isUserAuthenticated, showAuthRequiredNotification } from '@/shared/utils/auth';
 
 let activePopup: HTMLElement | null = null;
 
@@ -149,15 +148,6 @@ export class YouTubeCaptionDetector implements CaptionDetector {
     ev.stopPropagation();
     ev.preventDefault();
     
-    // בדוק אימות לפני תרגום
-    const authenticated = await isUserAuthenticated();
-    
-    if (!authenticated) {
-      console.log("[LearnFlow] Authentication required for translation");
-      showAuthRequiredNotification("תרגום כתוביות", "התחבר כדי לתרגם כתוביות");
-      return;
-    }
-    
     const lang = await this.getTargetLang();
     console.log("[LearnFlow] Target language:", lang);
     
@@ -167,11 +157,6 @@ export class YouTubeCaptionDetector implements CaptionDetector {
       
       if (!res.success || !res.text) {
         console.error("[LearnFlow] Translation failed");
-        
-        // בדוק אם הכישלון נבע מצורך באימות
-        if (res.error === 'Authentication required') {
-          showAuthRequiredNotification("תרגום כתוביות", "התחבר כדי לתרגם כתוביות");
-        }
         return;
       }
 

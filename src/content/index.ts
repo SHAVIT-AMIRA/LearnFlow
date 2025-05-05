@@ -18,109 +18,6 @@ console.log("[LearnFlow] Content script loaded");
 // Initialize Firebase to make sure Functions are available
 initFirebase();
 
-// Global auth state variable that any component can check
-let isUserAuthenticated = false;
-
-// CSS classes to control authentication-based visibility
-function injectAuthStyles() {
-  const style = document.createElement('style');
-  style.textContent = `
-    /* Auth state classes for body */
-    body.lf-unauthenticated .auth-gated {
-      display: none !important;
-    }
-    
-    body.lf-authenticated .auth-gated {
-      display: block !important;
-    }
-    
-    /* Auth-required buttons - controlled by classes */
-    body.lf-unauthenticated .auth-required-btn {
-      opacity: 0.6 !important;
-      cursor: not-allowed !important;
-      pointer-events: none !important;
-    }
-    
-    /* Show login prompt for auth-gated containers */
-    body.lf-unauthenticated .auth-gated-container::after {
-      content: "התחבר כדי להשתמש בפיצ'ר זה";
-      display: block;
-      padding: 1rem;
-      text-align: center;
-      background-color: #f0f4f8;
-      border-radius: 6px;
-      border: 1px solid #d0e0f0;
-      margin: 1rem 0;
-      font-size: 14px;
-      color: #4a5568;
-    }
-  `;
-  document.head.appendChild(style);
-  console.log("[LearnFlow] Auth styles injected");
-}
-
-// Inject the styles immediately
-injectAuthStyles();
-
-// Apply default auth state (features hidden) IMMEDIATELY
-updateUIBasedOnAuthState(false);
-
-// Helper function to update UI based on auth state
-function updateUIBasedOnAuthState(isAuthenticated: boolean) {
-  console.log(`[Content] User is ${isAuthenticated ? 'authenticated' : 'not authenticated'}, ${isAuthenticated ? 'enabling' : 'disabling'} features`);
-  
-  // Update global state
-  isUserAuthenticated = isAuthenticated;
-  
-  // Use classes on body instead of updating element styles directly
-  if (isAuthenticated) {
-    document.body.classList.add('lf-authenticated');
-    document.body.classList.remove('lf-unauthenticated');
-  } else {
-    document.body.classList.add('lf-unauthenticated');
-    document.body.classList.remove('lf-authenticated');
-  }
-  
-  // Dispatch a custom event so React components can react
-  document.dispatchEvent(new CustomEvent('authStateChanged', { 
-    detail: { isAuthenticated } 
-  }));
-}
-
-// Set up observer to automatically apply auth classes to new auth-gated elements
-const authElementObserver = new MutationObserver((mutations) => {
-  let newAuthElements = false;
-  
-  mutations.forEach(mutation => {
-    mutation.addedNodes.forEach(node => {
-      if (node instanceof HTMLElement) {
-        // Look for auth-related elements
-        if (
-          node.classList.contains('auth-gated') || 
-          node.classList.contains('auth-required-btn') ||
-          node.classList.contains('auth-gated-container') ||
-          node.querySelector('.auth-gated, .auth-required-btn, .auth-gated-container')
-        ) {
-          newAuthElements = true;
-        }
-      }
-    });
-  });
-  
-  if (newAuthElements) {
-    // An auth-related element was added, make sure it has correct visibility
-    console.log("[LearnFlow] New auth-gated elements detected, updating visibility");
-    // No need to query storage again - use the global state
-    updateUIBasedOnAuthState(isUserAuthenticated);
-  }
-});
-
-// Start observing for new auth elements
-authElementObserver.observe(document.body, {
-  childList: true,
-  subtree: true
-});
-
 // Wait for settings to be available before full initialization
 let hasSettings = false;
 let settingsRetryCount = 0;
@@ -131,20 +28,6 @@ initFloatingUI();
 
 // Start the initialization process by getting settings
 getSettingsAndInitialize();
-
-// Initial auth state check from persistent storage
-chrome.storage.local.get("authState", (result) => {
-  const isAuthenticated = result.authState?.isAuthenticated ?? false;
-  updateUIBasedOnAuthState(isAuthenticated);
-});
-
-// Listen for auth state changes from storage
-chrome.storage.onChanged.addListener((changes, area) => {
-  if (area === "local" && changes.authState) {
-    const isAuthenticated = changes.authState.newValue?.isAuthenticated ?? false;
-    updateUIBasedOnAuthState(isAuthenticated);
-  }
-});
 
 // Function to get settings and then initialize the detector
 function getSettingsAndInitialize() {
@@ -312,36 +195,10 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         panelExists.remove();
         sendResponse({ success: true, action: 'closed', panel: panelType });
       } else {
-        // CRITICAL: Check if this is an auth-gated panel AND if user is not authenticated
-        const isAuthGated = ['chat', 'notes', 'summary'].includes(panelType);
-        
-        // If message contains auth state from background, use it
-        // Otherwise use the global auth state variable
-        const isAuthenticated = message.isAuthenticated !== undefined 
-          ? message.isAuthenticated 
-          : isUserAuthenticated;
-        
-        // HARD BLOCK: Prevent panel creation if auth required but not authenticated
-        if (isAuthGated && !isAuthenticated) {
-          console.log(`[LearnFlow Content] Blocked panel ${panelType} - authentication required`);
-          sendResponse({ 
-            success: false, 
-            error: 'Authentication required',
-            details: 'Please log in to use this feature' 
-          });
-          return;
-        }
-        
         // Create new panel
         console.log(`[LearnFlow Content] Creating new panel: ${panelType}`);
         const panel = document.createElement('div');
         panel.id = `lf-panel-${panelType}`;
-        
-        // Apply auth-gated class for styling
-        if (isAuthGated) {
-          panel.classList.add('auth-gated');
-        }
-        
         panel.style.cssText = `
           position: fixed !important;
           top: 20% !important;
@@ -369,64 +226,6 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
           border-bottom: 1px solid #e5e7eb !important;
         `;
         panel.appendChild(title);
-        
-        // Add authentication notice if needed
-        if (isAuthGated && !isAuthenticated) {
-          // This is a fallback - we shouldn't reach here due to the hard block above
-          const authWarning = document.createElement('div');
-          authWarning.textContent = 'התחבר כדי להשתמש בפיצ\'ר זה';
-          authWarning.style.cssText = `
-            padding: 1rem !important;
-            text-align: center !important;
-            background-color: #f0f4f8 !important;
-            border-radius: 6px !important;
-            border: 1px solid #d0e0f0 !important;
-            margin: 1rem 0 !important;
-            font-size: 14px !important;
-            color: #4a5568 !important;
-          `;
-          panel.appendChild(authWarning);
-          
-          // Add login button
-          const loginButton = document.createElement('button');
-          loginButton.textContent = 'התחבר';
-          loginButton.style.cssText = `
-            display: block !important;
-            margin: 1rem auto !important;
-            padding: 0.5rem 1rem !important;
-            background-color: #3B82F6 !important;
-            color: white !important;
-            border: none !important;
-            border-radius: 4px !important;
-            cursor: pointer !important;
-            font-size: 14px !important;
-          `;
-          loginButton.onclick = () => {
-            // Open popup for login
-            chrome.runtime.sendMessage({ action: 'OPEN_LOGIN_POPUP' });
-          };
-          panel.appendChild(loginButton);
-          
-          // Add close button and add to body, then return early
-          const closeBtn = document.createElement('button');
-          closeBtn.textContent = '×';
-          closeBtn.style.cssText = `
-            position: absolute !important;
-            top: 8px !important;
-            right: 8px !important;
-            background: none !important;
-            border: none !important;
-            font-size: 20px !important;
-            cursor: pointer !important;
-            color: #666 !important;
-          `;
-          closeBtn.onclick = () => panel.remove();
-          panel.appendChild(closeBtn);
-          
-          document.body.appendChild(panel);
-          sendResponse({ success: true, action: 'opened', panel: panelType, authRequired: true });
-          return;
-        }
         
         // Add close button
         const closeBtn = document.createElement('button');
@@ -459,8 +258,6 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         
         // Render the appropriate component based on panel type
         const root = createRoot(content);
-        
-        // Pass auth state to React components - only pass videoId to avoid type errors
         switch (panelType) {
           case 'chat':
             root.render(React.createElement(ChatRoot, { videoId: currentVideoId }));
@@ -483,25 +280,6 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       sendResponse({ success: false, error: String(err) });
     }
     
-    return true;
-  }
-  
-  // Handle AUTH_STATE_CHANGED messages
-  if (message.action === 'AUTH_STATE_CHANGED') {
-    console.log('[Content] Received AUTH_STATE_CHANGED message:', message.data);
-    updateUIBasedOnAuthState(message.data.isAuthenticated);
-    
-    // CRITICAL: Close any auth-gated panels if user logged out
-    if (!message.data.isAuthenticated) {
-      // Find and close any auth-gated panels
-      const authPanels = document.querySelectorAll('#lf-panel-chat, #lf-panel-notes, #lf-panel-summary');
-      authPanels.forEach(panel => {
-        console.log('[Content] Removing auth-gated panel due to logout:', panel.id);
-        panel.remove();
-      });
-    }
-    
-    sendResponse({ success: true });
     return true;
   }
 });

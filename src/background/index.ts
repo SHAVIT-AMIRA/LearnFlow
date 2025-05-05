@@ -6,13 +6,22 @@
  * - Handles browser events (tabs, install, update)
  * - Direct communication with Firebase Functions for API calls
  */
-import { auth, fns } from './firebase';
+import { initFirebase, auth, fns } from './firebase';
+import { setupSync } from './sync';
+import { bus } from './broadcast';
 import { httpsCallable } from "firebase/functions";
-import { db } from './db';
-import { setupMessageListener } from './bus';
-import { setupQueueListeners, flush } from './queue';
-import { setupFirestoreSync } from './firestore-sync';
-import { setupAuthListener, AuthState } from './auth-channel';
+
+// Types for messages
+interface LearnFlowMessage {
+  action: string;
+  [key: string]: any;
+}
+
+interface ApiResponse {
+  success: boolean;
+  data?: any;
+  error?: string;
+}
 
 // User settings
 let userSettings = {
@@ -20,33 +29,30 @@ let userSettings = {
   // Add other default settings here
 };
 
-// Initialize all services
-console.log('[Background] Starting service worker initialization');
+// Authentication state
+let isAuthenticated = false;
 
-// Setup auth listener at the top level
-setupAuthListener();
+// Initialize services
+initFirebase();
+setupSync();
 
-// Setup DB sync
-setupFirestoreSync();
-
-// Setup messaging
-setupMessageListener();
-
-// Setup queue with online/offline listeners
-setupQueueListeners();
-
-// Helper to save user settings to storage
-function saveUserSettings(settings: any): void {
-  chrome.storage.local.set({ userSettings: settings }, () => {
-    if (chrome.runtime.lastError) {
-      console.error('[Background] Error saving settings to storage:', chrome.runtime.lastError);
-    } else {
-      console.log('[Background] User settings saved to storage');
+// Listen for auth state changes
+bus.on((msg) => {
+  if (msg.type === 'AUTH_STATE_CHANGED') {
+    isAuthenticated = msg.payload.isAuthenticated;
+    console.log(`[Background] Auth state changed: ${isAuthenticated ? 'Authenticated' : 'Not authenticated'}`);
+    
+    // If user logged out, reset to default settings
+    if (!isAuthenticated) {
+      userSettings = {
+        targetLanguage: 'en',
+      };
     }
-  });
-}
+    // If logged in, could load user-specific settings from Firestore here
+  }
+});
 
-// Direct API functions
+// Direct API functions to replace offscreen document
 
 /**
  * Call the Firebase Function to translate text
@@ -157,79 +163,157 @@ async function callSummarizeFunction(message: any): Promise<any> {
   }
 }
 
-// Handle legacy API calls (to be eventually refactored with the new message bus)
-chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  // Handle the message according to the action
-  if (typeof message === 'object' && message.action) {
-    switch (message.action) {
-      case 'TRANSLATE':
-        callTranslateFunction(message)
-          .then(result => sendResponse(result))
-          .catch(error => sendResponse({ success: false, error: String(error) }));
-        return true; // Keep the message channel open for async response
-        
-      case 'GEMINI_CHAT':
-        callGeminiChatFunction(message)
-          .then(result => sendResponse(result))
-          .catch(error => sendResponse({ success: false, error: String(error) }));
-        return true;
-        
-      case 'SUMMARIZE':
-        callSummarizeFunction(message)
-          .then(result => sendResponse(result))
-          .catch(error => sendResponse({ success: false, error: String(error) }));
-        return true;
-        
-      case 'GET_AUTH_STATE':
-        // Return current auth state
-        chrome.storage.local.get('authState', (data) => {
-          sendResponse({ success: true, authState: data.authState || null });
-        });
-        return true;
-        
-      case 'GET_USER_SETTINGS':
-        // Return user settings
-        chrome.storage.local.get('userSettings', (data) => {
-          sendResponse({ success: true, settings: data.userSettings || userSettings });
-        });
-        return true;
-        
-      case 'SAVE_USER_SETTINGS':
-        // Save updated user settings
-        userSettings = { ...userSettings, ...message.settings };
-        saveUserSettings(userSettings);
-        sendResponse({ success: true });
-        return false;
-        
-      case 'FLUSH_QUEUE':
-        // Manually trigger queue flushing
-        flush().then(() => {
-          sendResponse({ success: true });
-        }).catch(error => {
-          sendResponse({ success: false, error: String(error) });
-        });
-        return true;
-    }
-  }
-  
-  // If we get here, we couldn't handle the message
-  console.warn('[Background] Unhandled message:', message);
-  sendResponse({ success: false, error: 'Unknown message type' });
-  return false;
-});
-
 // Handle extension events
 chrome.runtime.onInstalled.addListener((details: chrome.runtime.InstalledDetails) => {
   if (details.reason === 'install') {
     console.log('[Background] Extension installed');
-    // Reset auth state to ensure new installs have correct state
-    chrome.storage.local.set({
-      authState: {
-        isAuth: false,
-        uid: null,
-        email: null,
-        displayName: null
+    // TODO: Open onboarding page
+  }
+});
+
+// Handle messages from content scripts and UI
+chrome.runtime.onMessage.addListener((
+  message: LearnFlowMessage, 
+  _sender: chrome.runtime.MessageSender, 
+  sendResponse: (response?: ApiResponse) => void
+) => {
+  // Handle different message types
+  switch (message.action) {
+    case 'TOGGLE_PANEL':
+      console.log(`[Background] Toggle panel: ${message.panel}`);
+      
+      // Forward the message to the active tab's content script to open the panel
+      chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+        if (tabs[0]?.id) {
+          chrome.tabs.sendMessage(tabs[0].id, message, (response) => {
+            console.log('[Background] Panel toggle response:', response);
+            sendResponse({ success: true, data: response });
+          });
+        } else {
+          console.log('[Background] No active tab to send panel toggle to');
+          sendResponse({ success: false, error: 'No active tab' });
+        }
+      });
+      
+      return true; // Keep channel open for async response
+      break;
+    
+    case 'GET_SETTINGS':
+      // Check auth state from Firebase directly
+      const authInstance = auth();
+      const currentUser = authInstance?.currentUser;
+      
+      console.log('[Background] GET_SETTINGS request', { 
+        isAuthenticated, 
+        hasUser: !!currentUser,
+        email: currentUser?.email || 'none'
+      });
+      
+      // Always return settings - even if not authenticated we return defaults
+      sendResponse({ 
+        success: true, 
+        data: userSettings
+      });
+      break;
+      
+    case 'SAVE_SETTINGS':
+      // Update settings
+      if (message.settings && typeof message.settings === 'object') {
+        userSettings = {...userSettings, ...message.settings};
+        console.log('[Background] Settings updated:', userSettings);
+        sendResponse({ success: true });
+      } else {
+        sendResponse({ success: false, error: 'Invalid settings object' });
       }
-    });
+      break;
+      
+    case 'GET_AUTH_STATE':
+      // Return current authentication state
+      const user = auth()?.currentUser;
+      sendResponse({
+        success: true,
+        data: {
+          isAuthenticated: !!user,
+          email: user?.email || null,
+          displayName: user?.displayName || null
+        }
+      });
+      break;
+      
+    case 'TRANSLATE_WORD':
+      // Handle translation request directly
+      console.log('[Background] Translation request:', message.word);
+      callTranslateFunction(message)
+        .then(response => {
+          console.log('[Background] Translation completed');
+          sendResponse(response);
+        })
+        .catch(error => {
+          const errorMessage = error instanceof Error ? error.message : String(error);
+          console.error('[Background] Translation error:', errorMessage);
+          sendResponse({
+            success: false,
+            error: errorMessage
+          });
+        });
+      return true; // Keep channel open for async response
+      
+    case 'ASK_GEMINI':
+      // Handle Gemini chat request directly
+      console.log('[Background] Gemini chat request');
+      callGeminiChatFunction(message)
+        .then(response => {
+          console.log('[Background] Gemini chat completed');
+          sendResponse(response);
+        })
+        .catch(error => {
+          const errorMessage = error instanceof Error ? error.message : String(error);
+          console.error('[Background] Gemini chat error:', errorMessage);
+          sendResponse({
+            success: false,
+            error: errorMessage
+          });
+        });
+      return true; // Keep channel open for async response
+      
+    case 'SUMMARIZE':
+      // Handle summarize request directly
+      console.log('[Background] Summarize request');
+      callSummarizeFunction(message)
+        .then(response => {
+          console.log('[Background] Summarize completed');
+          sendResponse(response);
+        })
+        .catch(error => {
+          const errorMessage = error instanceof Error ? error.message : String(error);
+          console.error('[Background] Summarize error:', errorMessage);
+          sendResponse({
+            success: false,
+            error: errorMessage
+          });
+        });
+      return true; // Keep channel open for async response
+      
+    case 'RECONNECT_OFFSCREEN':
+      // This is no longer needed but keep for backward compatibility
+      console.log('[Background] Reconnect request - no longer needed with direct API access');
+      sendResponse({ success: true, data: 'Direct API access is now used' });
+      break;
+      
+    default:
+      console.log('[Background] Unknown message:', message);
+  }
+});
+
+// Listen for tab updates to inject content script
+chrome.tabs.onUpdated.addListener((
+  tabId: number, 
+  changeInfo: chrome.tabs.TabChangeInfo, 
+  tab: chrome.tabs.Tab
+) => {
+  if (changeInfo.status === 'complete' && tab.url?.startsWith('http')) {
+    // Content script is injected via manifest.json
+    // This is just for additional logic if needed
+    bus.emit('TAB_UPDATED', { tabId, url: tab.url });
   }
 });

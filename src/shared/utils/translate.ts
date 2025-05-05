@@ -1,7 +1,6 @@
 // ---------- src/shared/utils/translate.ts ----------
 import { httpsCallable, HttpsCallableResult } from "firebase/functions";
 import { fns } from "@/background/firebase";
-import { isUserAuthenticated } from "./auth";
 
 // Create a safe version of httpsCallable that handles potentially null Functions object
 const safeCallable = <T, R>(functionName: string) => {
@@ -17,18 +16,6 @@ const safeCallable = <T, R>(functionName: string) => {
 
 export async function translateWord(word: string, target: string) {
   try {
-    // בדוק אימות לפני שליחת בקשת תרגום
-    const authenticated = await isUserAuthenticated();
-    
-    if (!authenticated) {
-      console.log("[Translate] Authentication required for translation");
-      return { 
-        success: false as const, 
-        error: 'Authentication required',
-        details: 'Please log in to use the translation feature'
-      };
-    }
-    
     const translateFn = safeCallable<
       { word: string; target: string }, 
       { translatedText: string; detectedSourceLanguage: string }
