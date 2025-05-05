@@ -2,59 +2,28 @@
 /**
  * Floating Notes drawer – simple textarea per video.
  */
-import { useState, useRef, useEffect } from "react";
-import { dbIDB } from "@/indexdb/dexie";
+import { useState, useRef } from "react";
+import { useNotes } from "../../shared/hooks/useNotes";
+import { useAuthListener } from "../../popup/hooks/useAuthListener";
+import { type Note } from "../../background/db";
 
-export function NotesRoot({ videoId }: { videoId: string }) {
-  const [notes, setNotes] = useState<Array<{ id?: string; text: string; ts: string }>>([]);
+interface NotesRootProps {
+  videoId: string;
+}
+
+export function NotesRoot({ videoId }: NotesRootProps) {
+  const { uid } = useAuthListener();
+  const { notes, add: addNoteViaHook } = useNotes(uid, videoId);
   const [newNote, setNewNote] = useState("");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
-  // Load notes
-  useEffect(() => {
-    const loadNotes = async () => {
-      try {
-        const videoNotes = await dbIDB.notes
-          .where("videoId")
-          .equals(videoId)
-          .reverse()
-          .sortBy("ts");
-        setNotes(videoNotes);
-      } catch (error) {
-        console.error("[Notes] Error loading notes:", error);
-      }
-    };
+  const saveNote = () => {
+    const textToSave = newNote.trim();
+    if (!textToSave) return;
     
-    loadNotes();
-  }, [videoId]);
-
-  // Save note
-  const saveNote = async () => {
-    if (!newNote.trim()) return;
-    
-    try {
-      const note = {
-        videoId,
-        text: newNote.trim(),
-        ts: new Date().toISOString()
-      };
-      
-      await dbIDB.notes.add(note);
-      setNotes([note, ...notes]);
-      setNewNote("");
-      
-      // Report to background
-      try {
-        chrome.runtime.sendMessage({ 
-          action: 'SAVE_NOTE', 
-          payload: note 
-        });
-      } catch (e) {
-        console.error("[Notes] Failed to report note save:", e);
-      }
-    } catch (error) {
-      console.error("[Notes] Error saving note:", error);
-    }
+    addNoteViaHook(textToSave);
+    setNewNote("");
+    textareaRef.current?.focus();
   };
 
   return (
@@ -70,21 +39,27 @@ export function NotesRoot({ videoId }: { videoId: string }) {
         />
         <button 
           onClick={saveNote}
-          className="mt-2 px-3 py-1 bg-blue-500 text-white rounded text-sm"
+          className="mt-2 px-3 py-1 bg-blue-500 text-white rounded text-sm hover:bg-blue-600 disabled:opacity-50"
+          disabled={!newNote.trim()}
         >
           Save Note
         </button>
       </div>
       <div className="flex-1 p-3 overflow-y-auto space-y-3">
-        {notes.map((note, index) => (
+        {notes.length === 0 && (
+          <p className="text-center text-sm text-gray-500">No notes for this video yet.</p>
+        )}
+        {(notes || []).map((note: Note, index: number) => (
           <div 
-            key={note.id || index} 
+            key={note.id || `note-${index}`} 
             className="p-2 bg-gray-50 border rounded text-sm"
           >
             <div className="whitespace-pre-wrap">{note.text}</div>
-            <div className="text-xs text-gray-500 mt-1">
-              {new Date(note.ts).toLocaleString()}
-            </div>
+            {note.ts && (
+              <div className="text-xs text-gray-500 mt-1">
+                {new Date(note.ts).toLocaleString()}
+              </div>
+            )}
           </div>
         ))}
       </div>

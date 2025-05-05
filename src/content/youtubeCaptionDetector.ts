@@ -10,6 +10,7 @@ import { translateWord } from '@/shared/utils/translate';
 import { enqueueWrite } from '@/indexdb/dexie';
 import { showTooltip } from './tooltip';
 import { CaptionDetector } from '@/types';
+import { isUserAuthenticated, showAuthRequiredNotification } from '@/shared/utils/auth';
 
 let activePopup: HTMLElement | null = null;
 
@@ -148,6 +149,15 @@ export class YouTubeCaptionDetector implements CaptionDetector {
     ev.stopPropagation();
     ev.preventDefault();
     
+    // בדוק אימות לפני תרגום
+    const authenticated = await isUserAuthenticated();
+    
+    if (!authenticated) {
+      console.log("[LearnFlow] Authentication required for translation");
+      showAuthRequiredNotification("תרגום כתוביות", "התחבר כדי לתרגם כתוביות");
+      return;
+    }
+    
     const lang = await this.getTargetLang();
     console.log("[LearnFlow] Target language:", lang);
     
@@ -157,6 +167,11 @@ export class YouTubeCaptionDetector implements CaptionDetector {
       
       if (!res.success || !res.text) {
         console.error("[LearnFlow] Translation failed");
+        
+        // בדוק אם הכישלון נבע מצורך באימות
+        if (res.error === 'Authentication required') {
+          showAuthRequiredNotification("תרגום כתוביות", "התחבר כדי לתרגם כתוביות");
+        }
         return;
       }
 
@@ -182,9 +197,10 @@ export class YouTubeCaptionDetector implements CaptionDetector {
   private async getTargetLang() {
     console.log("[LearnFlow] Getting target language");
     try {
-      const response = await chrome.runtime.sendMessage({ action: 'GET_SETTINGS' });
-      console.log("[LearnFlow] Got settings:", response);
-      return response?.data?.targetLanguage || 'en';
+      const response = await new Promise<any>(resolve => 
+        chrome.runtime.sendMessage({ action: 'GET_SETTINGS' }, resolve)
+      );
+      return response?.success ? response.data?.targetLanguage || 'en' : 'en';
     } catch (error) {
       console.error("[LearnFlow] Error getting settings:", error);
       return 'en'; // Default to English

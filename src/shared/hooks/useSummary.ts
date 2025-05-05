@@ -1,69 +1,82 @@
 // ---------- src/shared/hooks/useSummary.ts ----------
-import { useState, useEffect } from 'react';
-import { dbIDB, SummaryRow } from '@/indexdb/dexie';
-
-interface Term {
-  term: string;
-  def: string;
-}
+import { liveQuery } from 'dexie';
+import { useObservable } from 'react-use'; // Make sure react-use is installed
+import { db, type Summary } from '../../background/db'; // Import central db and Summary type
+import { useAuthListener } from '../../popup/hooks/useAuthListener'; // Import auth listener
 
 interface UseSummaryResult {
-  summary: string[];
-  terms: Term[];
+  summaryData: Summary | null;
   exportMd: () => void;
   exportPdf: () => void;
 }
 
-export function useSummary(videoId: string): UseSummaryResult {
-  const [summaryData, setSummaryData] = useState<SummaryRow | null>(null);
+export function useSummary(videoId?: string, url?: string): UseSummaryResult {
+  const { uid } = useAuthListener();
 
-  useEffect(() => {
-    const loadSummary = async () => {
-      const data = await dbIDB.summaries.get(videoId);
-      if (data) {
-        setSummaryData(data);
+  const summaryId = videoId || url;
+
+  const summaryData = useObservable<Summary | undefined>(
+    liveQuery(async () => {
+      if (!uid || !summaryId) return undefined;
+      
+      let queryResult;
+      if (videoId) {
+        queryResult = await db.summaries.where({ userId: uid, videoId: videoId }).first();
+      } else if (url) {
+         queryResult = await db.summaries.where({ userId: uid, url: url }).first();
+      } else {
+         queryResult = await db.summaries.get([uid, summaryId]);
       }
-    };
-    
-    loadSummary();
-  }, [videoId]);
+      
+      return queryResult;
+    }),
+    undefined
+  );
 
   const exportMd = () => {
-    if (!summaryData) return;
+    if (!summaryData || !summaryData.summary || !summaryData.terms) return;
     
-    let content = `# Summary for video\n\n`;
+    let content = `# Summary for ${summaryData.title || summaryId}\n\n`;
     
-    // Add bullet points
     content += `## Key Points\n\n`;
-    summaryData.summary.forEach(point => {
+    const points = Array.isArray(summaryData.summary) ? summaryData.summary : [summaryData.summary];
+    points.forEach((point: string) => {
       content += `* ${point}\n`;
     });
     
-    // Add terms
     content += `\n## Key Terms\n\n`;
-    summaryData.terms.forEach(term => {
-      content += `**${term.term}**: ${term.def}\n\n`;
-    });
     
-    // Create downloadable link
+    // Safely handle terms which could be string[] or Term[]
+    if (Array.isArray(summaryData.terms)) {
+      summaryData.terms.forEach((termItem: string | any) => {
+        if (typeof termItem === 'string') {
+          // If it's just a string, use it as the term with empty definition
+          content += `**${termItem}**: \n\n`;
+        } else if (typeof termItem === 'object' && 'term' in termItem) {
+          // If it has a term property, treat it as a Term object
+          const typedTerm = termItem as { term: string; def?: string };
+          content += `**${typedTerm.term}**: ${typedTerm.def || ''}\n\n`;
+        }
+      });
+    }
+    
     const blob = new Blob([content], { type: 'text/markdown' });
-    const url = URL.createObjectURL(blob);
+    const downloadUrl = URL.createObjectURL(blob);
     const a = document.createElement('a');
-    a.href = url;
-    a.download = `summary-${videoId}.md`;
+    a.href = downloadUrl;
+    a.download = `summary-${summaryId}.md`;
+    document.body.appendChild(a);
     a.click();
-    URL.revokeObjectURL(url);
+    document.body.removeChild(a);
+    URL.revokeObjectURL(downloadUrl);
   };
   
   const exportPdf = () => {
-    // In a real implementation, this would generate a PDF
-    // For now we'll just show an alert
-    alert('PDF export functionality would be implemented here');
+    alert('PDF export not implemented');
   };
 
   return {
-    summary: summaryData?.summary || [],
-    terms: summaryData?.terms || [],
+    summaryData: summaryData || null,
     exportMd,
     exportPdf
   };

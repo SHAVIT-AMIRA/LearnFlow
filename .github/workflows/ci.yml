@@ -1,0 +1,39 @@
+# --- .github/workflows/ci.yml ---
+# Continuous Integration pipeline: lint → test → build → functions deploy → CWS upload
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v2
+        with:
+          version: 8
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run lint
+      - run: pnpm run test -- --run
+      - run: pnpm run build
+      # Deploy Cloud Functions
+      - uses: w9jds/firebase-action@v13
+        with:
+          args: deploy --only functions
+        env:
+          FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
+      # Upload Chrome Web Store package (zip is output of pnpm build)
+      - name: Upload to CWS
+        run: npx chrome-webstore-upload-cli upload --source dist.zip --extension-id $EXT_ID --client-id $CLIENT_ID --client-secret $CLIENT_SECRET --refresh-token $REFRESH_TOKEN
+        env:
+          EXT_ID: ${{ secrets.CWS_EXT_ID }}
+          CLIENT_ID: ${{ secrets.CWS_CLIENT_ID }}
+          CLIENT_SECRET: ${{ secrets.CWS_CLIENT_SECRET }}
+          REFRESH_TOKEN: ${{ secrets.CWS_REFRESH_TOKEN }}

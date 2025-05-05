@@ -4,173 +4,102 @@
  * This allows us to make API calls without blocking the main thread
  * and solves CORS issues by using the extension's permissions
  */
-import { httpsCallable } from "firebase/functions";
-import { initFirebase, fns } from "@/background/firebase";
 
-// Initialize Firebase to have access to functions
-initFirebase();
+// Status tracking
+let isInitialized = false;
+let initializationError: string | null = null;
+
+// Update status in UI
+function updateStatus(message: string, isError = false) {
+  try {
+    const statusEl = document.getElementById('status');
+    if (statusEl) {
+      statusEl.textContent = message;
+      if (isError) {
+        statusEl.classList.add('error');
+        statusEl.classList.remove('ready');
+      } else {
+        statusEl.classList.add('ready');
+        statusEl.classList.remove('error');
+      }
+    }
+  } catch (e) {
+    // Ignore DOM errors
+  }
+}
+
+// Set initial status
+if (isInitialized) {
+  updateStatus("Firebase initialized, ready for API calls");
+} else {
+  updateStatus(`Firebase initialization failed: ${initializationError}`, true);
+}
 
 // Log that the offscreen document is loaded
-console.log("[Offscreen Gemini] Document loaded and ready for API calls");
+console.log("[Offscreen Gemini] Document loaded and ready to forward messages.");
 
-// Listen for messages from the background script
+// Listen for messages from the background script or other contexts
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  console.log("[Offscreen Gemini] Message received:", message.action, "from", sender.id || "unknown");
+  const senderInfo = sender.id ? 
+    `extension ${sender.id}` : 
+    (sender.tab ? `tab ${sender.tab.id}` : 'unknown source');
   
-  // Make sure this listener always returns true for async responses
-  let isAsyncResponse = false;
+  console.log(`[Offscreen Gemini] Message received: ${message.action} from ${senderInfo}`);
+
+  // Define which actions this offscreen document should forward to background
+  const actionsToForward = ['ASK_GEMINI_OFFSCREEN', 'TRANSLATE_OFFSCREEN', 'SUMMARIZE_OFFSCREEN'];
   
-  try {
-    // Handle different message types
+  if (actionsToForward.includes(message.action)) {
+    console.log(`[Offscreen Gemini] Forwarding ${message.action} to background script`);
+    
+    // Determine the corresponding background action type
+    let backgroundActionType;
     switch (message.action) {
-      case 'TRANSLATE_WORD':
-        handleTranslation(message, sendResponse);
-        isAsyncResponse = true; // Async response will be handled
+      case 'ASK_GEMINI_OFFSCREEN': 
+        backgroundActionType = 'ASK_GEMINI_BACKGROUND'; 
         break;
-        
-      case 'ASK_GEMINI':
-        handleGeminiChat(message, sendResponse);
-        isAsyncResponse = true; // Async response will be handled
+      case 'TRANSLATE_OFFSCREEN': 
+        backgroundActionType = 'TRANSLATE_BACKGROUND'; 
         break;
-        
-      case 'SUMMARIZE':
-        handleSummarize(message, sendResponse);
-        isAsyncResponse = true; // Async response will be handled
+      case 'SUMMARIZE_OFFSCREEN': 
+        backgroundActionType = 'SUMMARIZE_BACKGROUND'; 
         break;
-        
-      default:
-        console.error("[Offscreen Gemini] Unknown action:", message.action);
-        sendResponse({ 
-          success: false, 
-          error: `Unknown action: ${message.action}` 
-        });
+      default: // Should not happen due to includes check
+        console.error("Unhandled action type for forwarding:", message.action);
+        sendResponse({ success: false, error: "Internal error: Unhandled forwarding action" });
+        return false;
     }
-  } catch (error) {
-    console.error("[Offscreen Gemini] Error processing message:", error);
-    sendResponse({ 
-      success: false, 
-      error: error instanceof Error ? error.message : String(error) 
-    });
+    
+    // Forward the message to the background script
+    chrome.runtime.sendMessage(
+      { 
+        type: backgroundActionType,
+        payload: message.payload // Forward the original payload
+      },
+      (response) => {
+        if (chrome.runtime.lastError) {
+          console.error("Error forwarding message to background:", chrome.runtime.lastError);
+          sendResponse({ success: false, error: chrome.runtime.lastError.message });
+        } else {
+          // Send the background script's response back to the original caller
+          sendResponse(response);
+        }
+      }
+    );
+    
+    return true; // Indicate async response
+
+  } else if (message.action === 'PING') {
+    // Handle PING locally if needed
+    console.log("[Offscreen Gemini] Processing PING request locally");
+    sendResponse({ success: true, ping: 'pong' });
+    return false; 
+
+  } else {
+    // Action not meant for this offscreen document
+    console.warn("[Offscreen Gemini] Received unhandled action:", message.action);
+    // Optionally send a response indicating it wasn't handled here
+    // sendResponse({ success: false, error: `Action ${message.action} not handled by offscreen/gemini` });
+    return false; // Don't keep channel open if not handling
   }
-  
-  return isAsyncResponse; // Keep channel open for async responses
 });
-
-/**
- * Handle translation requests using Cloud Functions
- */
-async function handleTranslation(message: any, sendResponse: Function) {
-  try {
-    console.log("[Offscreen Gemini] Translating word:", message.word);
-    
-    const functions = fns();
-    if (!functions) {
-      console.error("[Offscreen Gemini] Firebase Functions not initialized");
-      sendResponse({ success: false, error: "Firebase Functions not initialized" });
-      return;
-    }
-    
-    const translateFn = httpsCallable(
-      functions, 
-      'translateWord'
-    );
-    
-    const result = await translateFn({
-      word: message.word,
-      target: message.target || 'en'
-    });
-    
-    console.log("[Offscreen Gemini] Translation result:", result.data);
-    sendResponse({ 
-      success: true, 
-      text: (result.data as any).translatedText,
-      detectedSource: (result.data as any).detectedSourceLanguage
-    });
-  } catch (error) {
-    console.error("[Offscreen Gemini] Translation error:", error);
-    sendResponse({ 
-      success: false, 
-      error: error instanceof Error ? error.message : String(error)
-    });
-  }
-}
-
-/**
- * Handle Gemini chat requests using Cloud Functions
- */
-async function handleGeminiChat(message: any, sendResponse: Function) {
-  try {
-    console.log("[Offscreen Gemini] Processing chat:", message.prompt);
-    
-    const functions = fns();
-    if (!functions) {
-      console.error("[Offscreen Gemini] Firebase Functions not initialized");
-      sendResponse({ success: false, error: "Firebase Functions not initialized" });
-      return;
-    }
-    
-    const geminiChatFn = httpsCallable(
-      functions, 
-      'askGemini'
-    );
-    
-    const result = await geminiChatFn({
-      prompt: message.prompt,
-      history: message.history || [],
-      context: message.context || '',
-      videoId: message.videoId || ''
-    });
-    
-    console.log("[Offscreen Gemini] Chat result received");
-    sendResponse({ 
-      success: true, 
-      response: (result.data as any).response
-    });
-  } catch (error) {
-    console.error("[Offscreen Gemini] Chat error:", error);
-    sendResponse({ 
-      success: false, 
-      error: error instanceof Error ? error.message : String(error)
-    });
-  }
-}
-
-/**
- * Handle summarization requests using Cloud Functions
- */
-async function handleSummarize(message: any, sendResponse: Function) {
-  try {
-    console.log("[Offscreen Gemini] Summarizing content for video:", message.videoId);
-    
-    const functions = fns();
-    if (!functions) {
-      console.error("[Offscreen Gemini] Firebase Functions not initialized");
-      sendResponse({ success: false, error: "Firebase Functions not initialized" });
-      return;
-    }
-    
-    const summarizeFn = httpsCallable(
-      functions, 
-      'summarizeVideo'
-    );
-    
-    const result = await summarizeFn({
-      videoId: message.videoId,
-      transcript: message.transcript || '',
-      language: message.language || 'en'
-    });
-    
-    console.log("[Offscreen Gemini] Summary result received");
-    sendResponse({ 
-      success: true, 
-      summary: (result.data as any).summary,
-      terms: (result.data as any).terms
-    });
-  } catch (error) {
-    console.error("[Offscreen Gemini] Summarization error:", error);
-    sendResponse({ 
-      success: false, 
-      error: error instanceof Error ? error.message : String(error)
-    });
-  }
-}

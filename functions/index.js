@@ -1,6 +1,18 @@
+// Load environment variables from .env file
+require('dotenv').config();
+
 const functions = require("firebase-functions");
 const fetch = require("node-fetch");
 const { GoogleGenerativeAI } = require("@google/generative-ai");
+
+// Get configuration from environment variables
+const config = functions.config();
+const GEMINI_API_KEY = config.gemini ? config.gemini.api_key : process.env.GEMINI_API_KEY;
+
+if (!GEMINI_API_KEY) {
+  console.warn("⚠️ No Gemini API key found in config or environment variables. " +
+    "Please set up the API key using Firebase Config or environment variables.");
+}
 
 exports.translateWord = functions.region("europe-west1").https.onCall(async (data, context) => {
   const { word, target } = data;
@@ -55,7 +67,19 @@ exports.translateWord = functions.region("europe-west1").https.onCall(async (dat
 });
 
 // Initialize the Gemini API client
-const genAI = new GoogleGenerativeAI("AIzaSyB8jSa4C5JTbTOFoYU49QHOXLyzZCZtE34");
+let genAI;
+try {
+  genAI = new GoogleGenerativeAI(GEMINI_API_KEY || "");
+  console.log("Gemini API initialized successfully");
+} catch (error) {
+  console.error("Failed to initialize Gemini API:", error);
+  // Create a fallback that will throw errors for any model requested
+  genAI = {
+    getGenerativeModel: () => {
+      throw new Error("Gemini API initialization failed. Please check API key configuration.");
+    }
+  };
+}
 
 /**
  * Firebase function to interact with Gemini AI
@@ -72,6 +96,14 @@ exports.askGemini = functions.region("europe-west1").https.onCall(async (data, c
   if (!prompt) {
     console.error("Missing required parameter: prompt");
     throw new functions.https.HttpsError("invalid-argument", "Missing prompt");
+  }
+
+  if (!GEMINI_API_KEY) {
+    console.error("No Gemini API key configured");
+    throw new functions.https.HttpsError(
+      "failed-precondition", 
+      "Gemini API is not properly configured. Please contact the administrator."
+    );
   }
 
   try {
@@ -150,7 +182,10 @@ exports.askGemini = functions.region("europe-west1").https.onCall(async (data, c
       };
     } catch (fallbackError) {
       console.error("Error with fallback Gemini 1.5:", fallbackError);
-      throw new functions.https.HttpsError("internal", `Chat generation failed: ${fallbackError.message}`);
+      throw new functions.https.HttpsError(
+        "internal", 
+        `Chat generation failed: ${fallbackError.message || "Unknown error"}`
+      );
     }
   }
 }); 

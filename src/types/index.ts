@@ -6,4 +6,4 @@ export interface CaptionDetector {
   source: string;
   detect(): HTMLElement | null;
   cleanup(): void;
-} 
+}

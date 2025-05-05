@@ -2,6 +2,7 @@
 import { useChat } from "@/shared/hooks/useChat";
 import { useRef, useEffect } from "react";
 import { MessageItem } from "./MessageItem";
+import { type Chat } from "../../background/db";
 
 export function ChatRoot({ videoId }: { videoId: string }) {
   const { messages, send, isLoading, error } = useChat(videoId);
@@ -43,8 +44,8 @@ export function ChatRoot({ videoId }: { videoId: string }) {
           </div>
         )}
         
-        {messages.map((m) => (
-          <MessageItem key={m.id} role={m.role} text={m.text} />
+        {messages.map((m: Chat) => (
+          <MessageItem key={m.id} role={m.role} text={m.message} />
         ))}
         
         {isLoading && (

@@ -15,7 +15,7 @@ import { auth } from "./firebase";
  * Sign in using Chrome's identity API (silent if possible)
  */
 export async function signInWithChrome(): Promise<void> {
-  const authInstance = auth();
+  const authInstance = auth;
   if (!authInstance) {
     throw new Error("Firebase auth not initialized");
   }
@@ -52,7 +52,7 @@ export async function signInWithChrome(): Promise<void> {
  * Sign in with email and password
  */
 export async function signInWithEmail(email: string, password: string): Promise<void> {
-  const authInstance = auth();
+  const authInstance = auth;
   if (!authInstance) {
     throw new Error("Firebase auth not initialized");
   }
@@ -70,7 +70,7 @@ export async function signInWithEmail(email: string, password: string): Promise<
  * Create a new account with email and password
  */
 export async function createUserWithEmail(email: string, password: string): Promise<void> {
-  const authInstance = auth();
+  const authInstance = auth;
   if (!authInstance) {
     throw new Error("Firebase auth not initialized");
   }
@@ -88,7 +88,7 @@ export async function createUserWithEmail(email: string, password: string): Prom
  * Sign out the current user
  */
 export async function signOutUser(): Promise<void> {
-  const authInstance = auth();
+  const authInstance = auth;
   if (!authInstance) {
     throw new Error("Firebase auth not initialized");
   }

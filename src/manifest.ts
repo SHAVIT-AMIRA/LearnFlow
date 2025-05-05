@@ -41,7 +41,7 @@ const manifest = {
     scopes: ["https://www.googleapis.com/auth/userinfo.email", "https://www.googleapis.com/auth/userinfo.profile"]
   },
   content_security_policy: {
-    extension_pages: "script-src 'self'; object-src 'self'; connect-src 'self' https://*.googleapis.com https://*.firebaseio.com https://*.cloudfunctions.net https://identitytoolkit.googleapis.com https://*.google.com https://*.firebase.com wss://*.firebaseio.com;"
+    extension_pages: "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'; connect-src 'self' https://*.googleapis.com https://*.firebaseio.com https://*.cloudfunctions.net https://identitytoolkit.googleapis.com https://*.google.com https://*.firebase.com https://generativelanguage.googleapis.com wss://*.firebaseio.com;"
   },
   web_accessible_resources: [
     {

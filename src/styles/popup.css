@@ -39,3 +39,29 @@ html, body, #root {
     background: rgba(255, 255, 255, 0.3);
   }
 }
+
+/* Auth-gated elements - hidden by default */
+.auth-gated {
+  display: none !important;
+}
+
+/* Auth-required buttons - disabled by default */
+.auth-required-btn.disabled {
+  opacity: 0.6 !important;
+  cursor: not-allowed !important;
+  pointer-events: none !important;
+}
+
+/* Show login prompt for auth-gated elements */
+.auth-gated-container:not(.authenticated)::after {
+  content: "התחבר כדי להשתמש בפיצ'ר זה";
+  display: block;
+  padding: 1rem;
+  text-align: center;
+  background-color: #f0f4f8;
+  border-radius: 6px;
+  border: 1px solid #d0e0f0;
+  margin: 1rem 0;
+  font-size: 14px;
+  color: #4a5568;
+}

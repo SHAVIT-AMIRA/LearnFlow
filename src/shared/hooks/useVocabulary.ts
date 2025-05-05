@@ -1,37 +1,22 @@
-import { useState, useEffect } from 'react';
-import { dbIDB, WordRow } from '@/indexdb/dexie';
 import { liveQuery } from 'dexie';
+import { useObservable } from 'react-use';
+import { db, type Word } from '../../background/db';
+import { useAuthListener } from '../../popup/hooks/useAuthListener';
 
-interface UseVocabularyResult {
-  words: WordRow[];
-  loading: boolean;
-  error: Error | null;
-}
+export function useVocabulary(limit = 50) {
+  const { uid } = useAuthListener();
 
-export function useVocabulary(limit = 50): UseVocabularyResult {
-  const [words, setWords] = useState<WordRow[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<Error | null>(null);
+  const words = useObservable(
+    liveQuery(() => {
+      if (!uid) return [] as Word[];
+      return db.words
+        .where('userId').equals(uid)
+        .reverse()
+        .limit(limit)
+        .toArray();
+    }),
+    [] // Initial value
+  );
 
-  useEffect(() => {
-    const subscription = liveQuery(() => 
-      dbIDB.words.orderBy('ts').reverse().limit(limit).toArray()
-    ).subscribe({
-      next: (result) => {
-        setWords(result);
-        setLoading(false);
-      },
-      error: (err) => {
-        console.error('Error loading vocabulary:', err);
-        setError(err);
-        setLoading(false);
-      }
-    });
-
-    return () => {
-      subscription.unsubscribe();
-    };
-  }, [limit]);
-
-  return { words, loading, error };
+  return { words: words || [] };
 }

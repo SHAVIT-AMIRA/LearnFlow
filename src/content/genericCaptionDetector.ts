@@ -5,9 +5,7 @@
  */
 import { SubtitleScanner } from "./subtitleScanner";
 import { highlightWords } from "./wordHighlighter";
-import { translateWord } from "@/shared/utils/translate";
 import { showTooltip } from "./tooltip";
-import { enqueueWrite } from "@/indexdb/dexie";
 
 export class GenericCaptionDetector {
   source = "generic-video" as const;
@@ -191,33 +189,40 @@ export class GenericCaptionDetector {
     const selection = window.getSelection();
     const selectedText = selection?.toString().trim();
     
-    if (!selectedText || selectedText.length < 1) return;
-    
-    // Filter out too long selections (likely not individual words)
-    if (selectedText.length > 50 || selectedText.split(/\s+/).length > 5) return;
+    if (!selectedText || selectedText.length < 1 || selectedText.length > 50 || selectedText.split(/\s+/).length > 5) return;
     
     console.log("[LearnFlow] Text selected:", selectedText);
     
-    // Wait a moment to ensure the selection is intentional
+    // Delay to ensure intentional selection
     setTimeout(async () => {
-      // Check if the selection still exists
       if (window.getSelection()?.toString().trim() !== selectedText) return;
       
-      const targetLang = await this.getTarget();
-      const res = await translateWord(selectedText, targetLang);
-      
-      if (!res.success || !res.text) return;
-      
-      showTooltip(e, selectedText, res.text);
-      
-      enqueueWrite("SAVE_WORD", {
-        originalWord: selectedText,
-        targetWord: res.text,
-        sourceLanguage: res.detectedSource || "auto",
-        targetLanguage: targetLang,
-        timestamp: new Date().toISOString(),
-        context: { source: this.source, url: location.href }
-      });
+      // Send message to background to handle translation and saving
+      chrome.runtime.sendMessage(
+        { 
+          type: "TRANSLATE_AND_SAVE_WORD", 
+          payload: { 
+            originalWord: selectedText,
+            context: { source: this.source, url: location.href } 
+          }
+        },
+        (response) => {
+          if (chrome.runtime.lastError) {
+            console.error("Error sending TRANSLATE_AND_SAVE_WORD:", chrome.runtime.lastError);
+            return;
+          }
+          
+          console.log("Background response:", response);
+          if (response?.success && response.translation) {
+            showTooltip(e, selectedText, response.translation);
+          } else if (response?.error === 'AUTH_REQUIRED') {
+            // Handle auth required notification if needed (can also be done in background)
+            console.log("Auth required for translation."); 
+          } else {
+            console.error("Translation failed:", response?.error || "Unknown error");
+          }
+        }
+      );
     }, 300);
   };
 
@@ -233,29 +238,32 @@ export class GenericCaptionDetector {
 
   private onWordClick = async (word: string, ev: MouseEvent) => {
     console.log("[LearnFlow] Word clicked:", word);
-    const targetLang = await this.getTarget();
-    const res = await translateWord(word, targetLang);
-    if (!res.success || !res.text) return;
 
-    showTooltip(ev, word, res.text);
-
-    enqueueWrite("SAVE_WORD", {
-      originalWord: word,
-      targetWord: res.text,
-      sourceLanguage: res.detectedSource || "auto",
-      targetLanguage: targetLang,
-      timestamp: new Date().toISOString(),
-      context: { source: this.source, url: location.href }
-    });
+    // Send message to background script to handle translation and saving
+    chrome.runtime.sendMessage(
+      { 
+        type: "TRANSLATE_AND_SAVE_WORD", 
+        payload: { 
+          originalWord: word,
+          context: { source: this.source, url: location.href } 
+        }
+      },
+      (response) => {
+        if (chrome.runtime.lastError) {
+          console.error("Error sending TRANSLATE_AND_SAVE_WORD:", chrome.runtime.lastError);
+          return;
+        }
+        
+        console.log("Background response:", response);
+        if (response?.success && response.translation) {
+          showTooltip(ev, word, response.translation);
+        } else if (response?.error === 'AUTH_REQUIRED') {
+          // Handle auth required notification
+          console.log("Auth required for translation.");
+        } else {
+          console.error("Translation failed:", response?.error || "Unknown error");
+        }
+      }
+    );
   };
-
-  private async getTarget() {
-    try {
-      const { data } = await chrome.runtime.sendMessage({ action: "GET_SETTINGS" });
-      return data?.targetLanguage || "en";
-    } catch (error) {
-      console.error("[LearnFlow] Error getting settings:", error);
-      return "en"; // Default to English
-    }
-  }
 }
